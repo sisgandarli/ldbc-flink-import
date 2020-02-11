@@ -17,6 +17,7 @@
 package org.s1ck.ldbc.functions;
 
 import org.apache.flink.api.common.functions.FlatMapFunction;
+import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.shaded.com.google.common.collect.Maps;
 import org.s1ck.ldbc.LDBCConstants;
 import org.s1ck.ldbc.LDBCConstants.FieldType;
@@ -34,12 +35,10 @@ import static org.s1ck.ldbc.LDBCConstants.TYPE_DISCRIMINATOR_FIELD;
  * Abstract base class for all line readers.
  *
  * @param <OUT> LDBC entity
- * @see VertexLineReader
  * @see EdgeLineReader
- * @see PropertyLineReader
  */
 public abstract class LineReader<OUT> implements
-  FlatMapFunction<String, OUT> {
+        MapFunction<String, OUT> {
 
   private final static int LOG2_LONG_MAX_VALUE = log2(Long.MAX_VALUE);
 

@@ -45,9 +45,10 @@ public class EdgeLineReader extends LineReader<LDBCEdge> {
   }
 
   @Override
-  public void flatMap(String line, Collector<LDBCEdge> collector) throws
+  public LDBCEdge map(String line) throws
     Exception {
     try {
+      reset();
       String[] fieldValues = getFieldValues(line);
       Long sourceVertexId = getSourceVertexId(fieldValues);
       Long targetVertexId = getTargetVertexId(fieldValues);
@@ -58,9 +59,9 @@ public class EdgeLineReader extends LineReader<LDBCEdge> {
       reuseEdge.setTargetVertexId(uniqueTargetVertexId);
       reuseEdge.setLabel(getClassLabel(fieldValues));
       reuseEdge.setProperties(getEdgeProperties(fieldValues));
-      collector.collect(reuseEdge);
-      reset();
+      return reuseEdge;
     } catch (NumberFormatException ignored) { }
+    return null;
   }
 
   private Long getSourceVertexId(String[] fieldValues) {

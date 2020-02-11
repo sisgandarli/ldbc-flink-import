@@ -27,11 +27,7 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.log4j.Logger;
 import org.s1ck.ldbc.functions.EdgeLineReader;
-import org.s1ck.ldbc.functions.PropertyLineReader;
-import org.s1ck.ldbc.functions.VertexLineReader;
 import org.s1ck.ldbc.tuples.LDBCEdge;
-import org.s1ck.ldbc.tuples.LDBCProperty;
-import org.s1ck.ldbc.tuples.LDBCVertex;
 
 import java.io.File;
 import java.io.IOException;
@@ -127,7 +123,7 @@ public class LDBCToFlink {
    *
    * @return DataSet containing all edges in the LDBC graph.
    */
-  public DataStream<LDBCEdge> getEdges() {
+  public DataStream<LDBCEdge> getEdges() throws Exception {
     LOG.info("Reading edges");
     List<DataStream<LDBCEdge>> edgeDataStreams =
       Lists.newArrayListWithCapacity(edgeFilePaths.size());
@@ -145,91 +141,26 @@ public class LDBCToFlink {
             });
   }
 
-  private DataStream<LDBCProperty> getProperties() {
-    LOG.info("Reading multi valued properties");
-    List<DataStream<LDBCProperty>> propertyDataSets =
-      Lists.newArrayListWithCapacity(propertyFilePaths.size());
-
-    for (String filePath : propertyFilePaths) {
-      propertyDataSets.add(readPropertyFile(filePath));
-    }
-
-    return unionDataStreams(propertyDataSets);
-  }
-
   private long getVertexClassCount() {
     return vertexFilePaths.size();
   }
 
-  private <T> DataStream<T> unionDataStreams(List<DataStream<T>> dataSets) {
+  private <T> DataStream<T> unionDataStreams(List<DataStream<T>> dataStreams) {
     DataStream<T> finalDataStream = null;
     boolean first = true;
-    for (DataStream<T> dataSet : dataSets) {
+    for (DataStream<T> dataStream : dataStreams) {
       if (first) {
-        finalDataStream = dataSet;
+        finalDataStream = dataStream;
         first = false;
       } else {
-        finalDataStream = finalDataStream.union(dataSet);
+        finalDataStream = finalDataStream.union(dataStream);
       }
     }
     return finalDataStream;
   }
 
-  private DataStream<LDBCVertex> readVertexFile(String filePath) {
-    LOG.info("Reading vertices from " + filePath);
-
-    String vertexClass = getVertexClass(getFileName(filePath)).toLowerCase();
-    Long vertexClassID = getVertexClassId(vertexClass);
-    Long classCount = (long) vertexFilePaths.size();
-
-    LOG.info(String.format("vertex class: %s vertex class ID: %d", vertexClass,
-      vertexClassID));
-
-    String[] vertexClassFields = null;
-    FieldType[] vertexClassFieldTypes = null;
-    switch (vertexClass) {
-    case VERTEX_CLASS_COMMENT:
-      vertexClassFields = VERTEX_CLASS_COMMENT_FIELDS;
-      vertexClassFieldTypes = VERTEX_CLASS_COMMENT_FIELD_TYPES;
-      break;
-    case VERTEX_CLASS_FORUM:
-      vertexClassFields = VERTEX_CLASS_FORUM_FIELDS;
-      vertexClassFieldTypes = VERTEX_CLASS_FORUM_FIELD_TYPES;
-      break;
-    case VERTEX_CLASS_ORGANISATION:
-      vertexClassFields = VERTEX_CLASS_ORGANISATION_FIELDS;
-      vertexClassFieldTypes = VERTEX_CLASS_ORGANISATION_FIELD_TYPES;
-      break;
-    case VERTEX_CLASS_PERSON:
-      vertexClassFields = VERTEX_CLASS_PERSON_FIELDS;
-      vertexClassFieldTypes = VERTEX_CLASS_PERSON_FIELD_TYPES;
-      break;
-    case VERTEX_CLASS_PLACE:
-      vertexClassFields = VERTEX_CLASS_PLACE_FIELDS;
-      vertexClassFieldTypes = VERTEX_CLASS_PLACE_FIELD_TYPES;
-      break;
-    case VERTEX_CLASS_POST:
-      vertexClassFields = VERTEX_CLASS_POST_FIELDS;
-      vertexClassFieldTypes = VERTEX_CLASS_POST_FIELD_TYPES;
-      break;
-    case VERTEX_CLASS_TAG:
-      vertexClassFields = VERTEX_CLASS_TAG_FIELDS;
-      vertexClassFieldTypes = VERTEX_CLASS_TAG_FIELD_TYPES;
-      break;
-    case VERTEX_CLASS_TAGCLASS:
-      vertexClassFields = VERTEX_CLASS_TAGCLASS_FIELDS;
-      vertexClassFieldTypes = VERTEX_CLASS_TAGCLASS_FIELD_TYPES;
-      break;
-    }
-    return env.readTextFile(filePath, "UTF-8")
-            .flatMap(
-      new VertexLineReader(vertexClassID, vertexClass, vertexClassFields,
-        vertexClassFieldTypes, classCount));
-  }
-
-  private DataStream<LDBCEdge> readEdgeFile(String filePath) {
+  private DataStream<LDBCEdge> readEdgeFile(String filePath) throws Exception {
     LOG.info("Reading edges from " + filePath);
-
     String fileName = getFileName(filePath);
     String edgeClass = getEdgeClass(fileName);
     String sourceVertexClass = getSourceVertexClass(fileName);
@@ -302,39 +233,11 @@ public class LDBCToFlink {
       edgeClassFieldTypes = EDGE_CLASS_LIKES_FIELD_TYPES;
       break;
     }
-
-    return env.readTextFile(filePath, "UTF-8").flatMap(
+    DataStream<LDBCEdge> result = env.readTextFile(filePath, "UTF-8").map(
       new EdgeLineReader(edgeClass, edgeClassFields, edgeClassFieldTypes,
         sourceVertexClassId, sourceVertexClass, targetVertexClassId,
         targetVertexClass, vertexClassCount));
-  }
-
-  private DataStream<LDBCProperty> readPropertyFile(String filePath) {
-    LOG.info("Reading properties from " + filePath);
-
-    String fileName = getFileName(filePath);
-    String propertyClass = getPropertyClass(fileName);
-    String vertexClass = getVertexClass(fileName);
-    Long vertexClassId = getVertexClassId(vertexClass);
-    Long vertexClassCount = getVertexClassCount();
-
-    String[] propertyClassFields = null;
-    FieldType[] propertyClassFieldTypes = null;
-
-    switch (propertyClass) {
-    case PROPERTY_CLASS_EMAIL:
-      propertyClassFields = PROPERTY_CLASS_EMAIL_FIELDS;
-      propertyClassFieldTypes = PROPERTY_CLASS_EMAIL_FIELD_TYPES;
-      break;
-    case PROPERTY_CLASS_SPEAKS:
-      propertyClassFields = PROPERTY_CLASS_SPEAKS_FIELDS;
-      propertyClassFieldTypes = PROPERTY_CLASS_SPEAKS_FIELD_TYPES;
-      break;
-    }
-
-    return env.readTextFile(filePath, "UTF-8").flatMap(
-      new PropertyLineReader(propertyClass, propertyClassFields,
-        propertyClassFieldTypes, vertexClass, vertexClassId, vertexClassCount));
+    return result;
   }
 
   private String getFileName(String filePath) {
