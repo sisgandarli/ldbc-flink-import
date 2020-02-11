@@ -17,12 +17,10 @@
 package org.s1ck.ldbc;
 
 import org.apache.flink.api.common.functions.MapFunction;
-import org.apache.flink.api.java.DataSet;
-import org.apache.flink.api.java.ExecutionEnvironment;
-import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.api.java.utils.DataSetUtils;
 import org.apache.flink.hadoop.shaded.com.google.common.collect.Lists;
 import org.apache.flink.hadoop.shaded.com.google.common.collect.Maps;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
@@ -30,11 +28,8 @@ import org.apache.hadoop.fs.Path;
 import org.apache.log4j.Logger;
 import org.s1ck.ldbc.functions.EdgeLineReader;
 import org.s1ck.ldbc.functions.PropertyLineReader;
-import org.s1ck.ldbc.functions.PropertyValueGroupReducer;
 import org.s1ck.ldbc.functions.VertexLineReader;
-import org.s1ck.ldbc.functions.VertexPropertyGroupCoGroupReducer;
 import org.s1ck.ldbc.tuples.LDBCEdge;
-import org.s1ck.ldbc.tuples.LDBCMultiValuedProperty;
 import org.s1ck.ldbc.tuples.LDBCProperty;
 import org.s1ck.ldbc.tuples.LDBCVertex;
 
@@ -55,7 +50,7 @@ public class LDBCToFlink {
   private static final Logger LOG = Logger.getLogger(LDBCToFlink.class);
 
   /** Flink execution environment */
-  private final ExecutionEnvironment env;
+  private final StreamExecutionEnvironment env;
 
   /** Hadoop Configuration */
   private final Configuration conf;
@@ -94,7 +89,7 @@ public class LDBCToFlink {
    * @param ldbcDirectory path to LDBC output
    * @param env Flink execution environment
    */
-  public LDBCToFlink(String ldbcDirectory, ExecutionEnvironment env) {
+  public LDBCToFlink(String ldbcDirectory, StreamExecutionEnvironment env) {
     this(ldbcDirectory, env, new Configuration());
   }
 
@@ -105,7 +100,7 @@ public class LDBCToFlink {
    * @param env Flink execution environment
    * @param conf Hadoop cluster configuration
    */
-  public LDBCToFlink(String ldbcDirectory, ExecutionEnvironment env,
+  public LDBCToFlink(String ldbcDirectory, StreamExecutionEnvironment env,
     Configuration conf) {
     if (ldbcDirectory == null || "".equals(ldbcDirectory)) {
       throw new IllegalArgumentException("LDBC directory must not be null or empty");
@@ -128,92 +123,59 @@ public class LDBCToFlink {
   }
 
   /**
-   * Parses and transforms the LDBC vertex files to {@link LDBCVertex} tuples.
-   *
-   * @return DataSet containing all vertices in the LDBC graph
-   */
-  public DataSet<LDBCVertex> getVertices() {
-    LOG.info("Reading vertices");
-    final List<DataSet<LDBCVertex>> vertexDataSets =
-      Lists.newArrayListWithCapacity(vertexFilePaths.size());
-    for (String filePath : vertexFilePaths) {
-      vertexDataSets.add(readVertexFile(filePath));
-    }
-
-    DataSet<LDBCVertex> vertices = unionDataSets(vertexDataSets);
-
-    vertices = addMultiValuePropertiesToVertices(vertices);
-
-    return vertices;
-  }
-
-  /**
    * Parses and transforms the LDBC edge files to {@link LDBCEdge} tuples.
    *
    * @return DataSet containing all edges in the LDBC graph.
    */
-  public DataSet<LDBCEdge> getEdges() {
+  public DataStream<LDBCEdge> getEdges() {
     LOG.info("Reading edges");
-    List<DataSet<LDBCEdge>> edgeDataSets =
+    List<DataStream<LDBCEdge>> edgeDataStreams =
       Lists.newArrayListWithCapacity(edgeFilePaths.size());
     for (String filePath : edgeFilePaths) {
-      edgeDataSets.add(readEdgeFile(filePath));
+      edgeDataStreams.add(readEdgeFile(filePath));
     }
 
-    return DataSetUtils.zipWithUniqueId(unionDataSets(edgeDataSets))
-      .map(new MapFunction<Tuple2<Long, LDBCEdge>, LDBCEdge>() {
-        @Override
-        public LDBCEdge map(Tuple2<Long, LDBCEdge> tuple) throws Exception {
-          tuple.f1.setEdgeId(tuple.f0);
-          return tuple.f1;
-        }
-      }).withForwardedFields("f0");
+    return unionDataStreams(edgeDataStreams)
+            .map(new MapFunction<LDBCEdge, LDBCEdge>() {
+              @Override
+              public LDBCEdge map(LDBCEdge ldbcEdge) throws Exception {
+                ldbcEdge.setEdgeId((long) (Math.random()) * 10000);
+                return ldbcEdge;
+              }
+            });
   }
 
-  private DataSet<LDBCVertex> addMultiValuePropertiesToVertices(
-    DataSet<LDBCVertex> vertices) {
-    DataSet<LDBCMultiValuedProperty> groupedProperties = getProperties()
-      // group properties by vertex id and property key
-      .groupBy(0, 1)
-        // and build tuples containing vertex id, property key and value list
-      .reduceGroup(new PropertyValueGroupReducer());
-
-    // co group vertices and property groups and update vertices
-    return vertices.coGroup(groupedProperties).where(0).equalTo(0)
-      .with(new VertexPropertyGroupCoGroupReducer());
-  }
-
-  private DataSet<LDBCProperty> getProperties() {
+  private DataStream<LDBCProperty> getProperties() {
     LOG.info("Reading multi valued properties");
-    List<DataSet<LDBCProperty>> propertyDataSets =
+    List<DataStream<LDBCProperty>> propertyDataSets =
       Lists.newArrayListWithCapacity(propertyFilePaths.size());
 
     for (String filePath : propertyFilePaths) {
       propertyDataSets.add(readPropertyFile(filePath));
     }
 
-    return unionDataSets(propertyDataSets);
+    return unionDataStreams(propertyDataSets);
   }
 
   private long getVertexClassCount() {
     return vertexFilePaths.size();
   }
 
-  private <T> DataSet<T> unionDataSets(List<DataSet<T>> dataSets) {
-    DataSet<T> finalDataSet = null;
+  private <T> DataStream<T> unionDataStreams(List<DataStream<T>> dataSets) {
+    DataStream<T> finalDataStream = null;
     boolean first = true;
-    for (DataSet<T> dataSet : dataSets) {
+    for (DataStream<T> dataSet : dataSets) {
       if (first) {
-        finalDataSet = dataSet;
+        finalDataStream = dataSet;
         first = false;
       } else {
-        finalDataSet = finalDataSet.union(dataSet);
+        finalDataStream = finalDataStream.union(dataSet);
       }
     }
-    return finalDataSet;
+    return finalDataStream;
   }
 
-  private DataSet<LDBCVertex> readVertexFile(String filePath) {
+  private DataStream<LDBCVertex> readVertexFile(String filePath) {
     LOG.info("Reading vertices from " + filePath);
 
     String vertexClass = getVertexClass(getFileName(filePath)).toLowerCase();
@@ -259,12 +221,13 @@ public class LDBCToFlink {
       vertexClassFieldTypes = VERTEX_CLASS_TAGCLASS_FIELD_TYPES;
       break;
     }
-    return env.readTextFile(filePath, "UTF-8").flatMap(
+    return env.readTextFile(filePath, "UTF-8")
+            .flatMap(
       new VertexLineReader(vertexClassID, vertexClass, vertexClassFields,
         vertexClassFieldTypes, classCount));
   }
 
-  private DataSet<LDBCEdge> readEdgeFile(String filePath) {
+  private DataStream<LDBCEdge> readEdgeFile(String filePath) {
     LOG.info("Reading edges from " + filePath);
 
     String fileName = getFileName(filePath);
@@ -346,7 +309,7 @@ public class LDBCToFlink {
         targetVertexClass, vertexClassCount));
   }
 
-  private DataSet<LDBCProperty> readPropertyFile(String filePath) {
+  private DataStream<LDBCProperty> readPropertyFile(String filePath) {
     LOG.info("Reading properties from " + filePath);
 
     String fileName = getFileName(filePath);
